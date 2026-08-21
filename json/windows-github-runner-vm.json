@@ -42,7 +42,7 @@
       "type": "info"
     },
     {
-      "text": "On the first boot only, press a key at 'Press any key to boot from CD...' to launch the unattended installer. Subsequent boots skip it automatically.",
+      "text": "The first boot's 'Press any key to boot from CD...' prompt is auto-confirmed via qm sendkey when the VM is started by the script; if you start the VM yourself, press a key at that prompt for the first boot only.",
       "type": "info"
     },
     {

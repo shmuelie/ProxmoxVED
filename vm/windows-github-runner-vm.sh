@@ -546,6 +546,20 @@ if [ "$START_VM" == "yes" ]; then
   msg_info "Starting Windows GitHub Runner VM"
   qm start $VMID >/dev/null 2>&1
   msg_ok "Started Windows GitHub Runner VM"
+
+  # The Windows ISO shows "Press any key to boot from CD or DVD..." on the first
+  # boot. Auto-confirm it with qm sendkey instead of asking the user to watch the
+  # console. The window is deliberately short (~30s): it only needs to catch this
+  # first prompt, and it finishes long before Setup reaches its first reboot - so
+  # it can never re-trigger the (disk-wiping) installer. On later reboots the CD
+  # prompt simply times out and the boot order (ide2;sata0) falls through to the
+  # now-bootable disk, so no keypress is needed there.
+  msg_info "Confirming boot from installation media"
+  for _ in $(seq 1 15); do
+    qm sendkey "$VMID" ret >/dev/null 2>&1 || true
+    sleep 2
+  done
+  msg_ok "Unattended installation started"
 fi
 
 # ==============================================================================
@@ -560,7 +574,11 @@ echo -e "${TAB}${DGN}Runner Name: ${BGN}${RUNNER_NAME}${CL}"
 echo -e "${TAB}${DGN}Runner Labels: ${BGN}${RUNNER_LABELS}${CL}"
 echo -e "${TAB}${DGN}Administrator Password: ${BGN}${ADMIN_PASS}${CL}"
 echo -e "${TAB}${YW}Save the Administrator password now - it is not stored anywhere else.${CL}"
-echo -e "${TAB}${YW}On the FIRST boot only, press a key at 'Press any key to boot from CD...' to start the unattended install.${CL}"
+if [ "$START_VM" == "yes" ]; then
+  echo -e "${TAB}${GN}Boot from installation media was auto-confirmed - setup is running unattended.${CL}"
+else
+  echo -e "${TAB}${YW}When you start the VM, press a key at 'Press any key to boot from CD...' (first boot only).${CL}"
+fi
 echo -e "${TAB}${YW}Setup runs unattended; the runner registers automatically on first logon (log: C:\\actions-runner-install.log).${CL}"
 
 post_update_to_api "done" "none"
