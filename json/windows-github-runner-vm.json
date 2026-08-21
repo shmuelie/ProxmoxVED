@@ -1,0 +1,53 @@
+{
+  "name": "Windows GitHub Runner VM",
+  "slug": "windows-github-runner-vm",
+  "categories": [
+    1
+  ],
+  "date_created": "2026-08-20",
+  "type": "vm",
+  "updateable": false,
+  "privileged": false,
+  "architectures": ["amd64"],
+  "interface_port": null,
+  "documentation": "https://docs.github.com/en/actions/hosting-your-own-runners",
+  "website": "https://github.com/actions/runner",
+  "logo": "https://cdn.jsdelivr.net/gh/selfhst/icons@main/webp/github.webp",
+  "description": "Creates a Windows Server 2025 QEMU/KVM VM that installs unattended and registers itself as a self-hosted GitHub Actions runner (Windows service). Windows cannot run in an LXC container, so this is delivered as a VM. The install uses an AHCI disk and E1000 NIC so no VirtIO drivers are needed to complete setup; the VirtIO ISO is attached for optional performance upgrades afterwards.",
+  "install_methods": [
+    {
+      "type": "default",
+      "script": "vm/windows-github-runner-vm.sh",
+      "config_path": "C:\\actions-runner",
+      "resources": {
+        "cpu": 4,
+        "ram": 8192,
+        "hdd": 60,
+        "os": "Windows Server",
+        "version": "2025"
+      }
+    }
+  ],
+  "default_credentials": {
+    "username": "Administrator",
+    "password": null
+  },
+  "notes": [
+    {
+      "text": "Upload a Windows Server 2025 ISO to an ISO-content storage before running; the script lists available ISOs for selection.",
+      "type": "warning"
+    },
+    {
+      "text": "You must provide a runner registration token (repo/org Settings -> Actions -> Runners -> New self-hosted runner). Registration tokens are short-lived, so run the script soon after generating one.",
+      "type": "info"
+    },
+    {
+      "text": "On the first boot only, press a key at 'Press any key to boot from CD...' to launch the unattended installer. Subsequent boots skip it automatically.",
+      "type": "info"
+    },
+    {
+      "text": "The Administrator password is randomly generated and printed once at the end of the script - save it immediately.",
+      "type": "warning"
+    }
+  ]
+}
