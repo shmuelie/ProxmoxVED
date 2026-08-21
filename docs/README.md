@@ -99,6 +99,7 @@ Topics include:
 * Environment-variable-based provisioning
 * [Incus host setup](guides/incus.md) (unified `ct/` scripts on Incus)
 * [Script origin (fork/branch)](guides/source-origin.md) (local checkout + remote `run.sh`)
+* [Windows GitHub Actions runner VM](guides/windows-github-runner.md) (unattended Windows Server 2025 self-hosted runner)
 
 ➡️ [Open Configuration Guides](https://community-scripts.org/docs/guides/readme)
 
