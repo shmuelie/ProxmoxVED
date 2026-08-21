@@ -507,9 +507,28 @@ Remove-Item "$dir\runner.zip" -Force
 Stop-Transcript
 RUNNERPS1
 
-# Substitute values (use # as delimiter; values contain no #)
-sed -i "s#__IMAGEINDEX__#${IMAGE_INDEX}#g; s#__COMPUTERNAME__#${WINHN}#g; s#__ADMINPASS__#${ADMIN_PASS}#g" "$UNATTEND_DIR/autounattend.xml"
-sed -i "s#__URL__#${RUNNER_URL}#g; s#__TOKEN__#${RUNNER_TOKEN}#g; s#__NAME__#${RUNNER_NAME}#g; s#__LABELS__#${RUNNER_LABELS}#g" "$UNATTEND_DIR/scripts/install-runner.ps1"
+# Substitute placeholders with literal bash replacement (safe for user input
+# that may contain sed-special characters like & # or \).
+_subst_file() {
+  local file="$1"
+  shift
+  local content
+  content="$(cat "$file")"
+  while [ "$#" -ge 2 ]; do
+    content="${content//"$1"/"$2"}"
+    shift 2
+  done
+  printf '%s\n' "$content" >"$file"
+}
+_subst_file "$UNATTEND_DIR/autounattend.xml" \
+  "__IMAGEINDEX__" "$IMAGE_INDEX" \
+  "__COMPUTERNAME__" "$WINHN" \
+  "__ADMINPASS__" "$ADMIN_PASS"
+_subst_file "$UNATTEND_DIR/scripts/install-runner.ps1" \
+  "__URL__" "$RUNNER_URL" \
+  "__TOKEN__" "$RUNNER_TOKEN" \
+  "__NAME__" "$RUNNER_NAME" \
+  "__LABELS__" "$RUNNER_LABELS"
 
 UNATTEND_ISO="$ISO_DIR/${VMID}-github-runner-unattend.iso"
 $MKISO -quiet -J -r -V UNATTEND -o "$UNATTEND_ISO" "$UNATTEND_DIR" >/dev/null 2>&1
@@ -532,8 +551,8 @@ qm set $VMID \
   --efidisk0 "${STORAGE}:0,efitype=4m,pre-enrolled-keys=0" \
   --sata0 "${STORAGE}:${DISK_GB},${DISK_CACHE}ssd=1" \
   --ide2 "${WIN_ISO_REF},media=cdrom" \
-  --ide0 "${ISO_STORAGE}:iso/$(basename "$UNATTEND_ISO"),media=cdrom" \
-  --ide1 "${ISO_STORAGE}:iso/virtio-win.iso,media=cdrom" \
+  --sata1 "${ISO_STORAGE}:iso/$(basename "$UNATTEND_ISO"),media=cdrom" \
+  --sata2 "${ISO_STORAGE}:iso/virtio-win.iso,media=cdrom" \
   --boot "order=ide2;sata0" >/dev/null
 msg_ok "Attached disks and installation media"
 
