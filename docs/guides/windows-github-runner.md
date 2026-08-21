@@ -1,54 +1,48 @@
 # Windows GitHub Actions Runner VM
 
-`vm/windows-github-runner-vm.sh` creates a **Windows Server 2025** QEMU/KVM VM that
-installs unattended and registers itself as a self-hosted GitHub Actions runner.
+`vm/windows-github-runner-vm.sh` creates a **Windows Server 2025** QEMU/KVM VM
+from Microsoft's pre-built **evaluation VHD** and registers it as a self-hosted
+GitHub Actions runner.
 
 Windows cannot run in an LXC container, so unlike the Linux `github-runner`
-container script this ships as a full VM.
+container script this ships as a full VM. Using the VHD skips Windows Setup
+entirely — the disk boots straight to OOBE — so there is **no install ISO, no
+"press any key to boot from CD", and no image-index guessing**.
 
 ## Requirements
 
 - A Proxmox VE host (run the script as `root` on the host).
-- A **Windows Server 2025 ISO** already uploaded to a storage with **ISO** content
-  enabled. The script lists the ISOs it finds for you to pick — it does not
-  download Windows (there is no stable public direct URL).
+- The **Windows Server 2025 evaluation VHD**, downloaded from the
+  [Microsoft Evaluation Center](https://www.microsoft.com/en-us/evalcenter/download-windows-server-2025).
+  Place it on the host (any path) or host it at an `https://` URL the host can
+  reach — the script asks for the path/URL. It is not downloaded for you (the
+  eval download is gated, with no stable direct URL).
 - A **runner registration token** from GitHub
   (repo/org → **Settings → Actions → Runners → New self-hosted runner**).
   Registration tokens are short-lived (~1 hour), so generate one just before running.
-- Free space on the ISO storage for `virtio-win.iso` (~700 MB, downloaded
-  automatically) plus a small generated unattend ISO.
+- Free space on the target storage for the imported disk, plus temporary space
+  for a working copy of the VHD.
 - Outbound internet from the VM (used on first logon to download the runner).
 
 ## What the script does
 
 1. Prompts for VM resources (ID, cores, RAM, disk, bridge, MAC/VLAN) and runner
    settings (GitHub URL, registration token, runner name, labels).
-2. Lets you select the Windows Server 2025 ISO from your ISO storages.
-3. Downloads the VirtIO drivers ISO (cached between runs).
-4. Generates an `autounattend.xml` plus a first-logon `install-runner.ps1`, packed
-   into a small unattend ISO.
-5. Creates the VM (UEFI/OVMF, q35) and attaches the disk and installation media.
-6. Starts the VM and auto-confirms the first-boot CD prompt.
+2. Asks for the path/URL to the evaluation VHD.
+3. Copies the VHD to a working file and injects, offline with `virt-customize`:
+   - an `unattend.xml` answer file into `\Windows\Panther\` (and the Sysprep dir),
+   - an `install-runner.ps1` into `C:\`.
+4. Creates the VM, imports the VHD as the boot disk, and (optionally) starts it.
+5. First boot runs OOBE unattended, auto-logs-in as `Administrator` once, and the
+   first-logon command installs and registers the runner as a Windows service.
 
-### Driver-free install by design
+### Why Gen1 / SeaBIOS / IDE
 
-To keep the unattended install from needing VirtIO drivers during Windows Setup,
-the OS disk is **AHCI (`sata0`)** and the NIC is **E1000**, both of which have
-in-box Windows drivers. The VirtIO ISO is still attached so you can switch the
-disk/NIC to VirtIO and install the QEMU guest agent afterwards for better
-performance.
-
-### First-boot "Press any key to boot from CD"
-
-The Windows ISO shows `Press any key to boot from CD or DVD...` on the first boot.
-When the script starts the VM it auto-confirms this with `qm sendkey` for a short
-(~30 s) window. That window ends well before Windows Setup reaches its first
-reboot, so it only ever triggers this initial prompt — later reboots let the
-prompt time out and fall through the boot order (`ide2;sata0`) to the now-bootable
-disk with no keypress.
-
-If you answer "no" to *Start VM when completed*, press a key at that prompt
-yourself on the first boot only.
+The Microsoft evaluation VHD is a **Generation 1** image (BIOS/MBR), so the VM is
+created with **SeaBIOS**, an **IDE** boot disk, and an **E1000** NIC. These all
+have in-box Windows drivers, so the imported image boots and gets on the network
+with no driver injection. For better performance, install the VirtIO drivers and
+the QEMU guest agent inside the VM afterwards and switch the disk/NIC to VirtIO.
 
 ## Running it
 
@@ -57,25 +51,25 @@ bash vm/windows-github-runner-vm.sh
 ```
 
 Choose **Default** for sensible defaults (4 cores, 8 GiB RAM, 60 GiB disk) or
-**Advanced** to customise everything, including the WIM image index.
+**Advanced** to customise everything.
 
 The generated **Administrator password** is printed once at the end — save it
 immediately, it is not stored anywhere else.
 
 ## After it runs
 
-- Windows installs unattended, then auto-logs-in as `Administrator` once.
-- `install-runner.ps1` downloads the latest `actions/runner`, runs
-  `config.cmd --unattended --runasservice`, and the runner comes up as a Windows
-  service — it should appear **Online** under the repo/org runners.
+- The VM boots to OOBE, applies the answer file, and auto-logs-in once.
+- `install-runner.ps1` extends `C:` to fill the disk, downloads the latest
+  `actions/runner`, runs `config.cmd --unattended --runasservice`, and the runner
+  comes up as a Windows service — it should appear **Online** under the repo/org
+  runners.
 - Progress/troubleshooting log inside the VM: `C:\actions-runner-install.log`.
 
-## Image index
+## Evaluation edition
 
-The install defaults to WIM image index **2** (Standard, Desktop Experience),
-which is correct for a multi-edition retail ISO. An **evaluation** ISO may number
-its editions differently — if Setup can't find the image, re-run with **Advanced**
-and set the correct index.
+The prebuilt VHD is **Windows Server 2025 Evaluation** (180 days). If you need a
+licensed/retail edition or your own media, an ISO-based install would be required
+instead; this script is intentionally VHD-only for speed and determinism.
 
 ## Updating the runner
 
@@ -92,7 +86,7 @@ C:\actions-runner\config.cmd remove --token <NEW_REGISTRATION_TOKEN>
 
 | Symptom | Check |
 | ------- | ----- |
-| No ISOs listed | Upload a Windows Server 2025 ISO to a storage with **ISO** content enabled. |
-| Setup can't find the Windows image | Wrong WIM index — re-run Advanced and change it. |
+| "Failed to inject configuration" | The path/URL isn't a valid Windows VHD, or `libguestfs-tools` couldn't mount it. |
+| VM won't boot / INACCESSIBLE_BOOT_DEVICE | The image expects BIOS/IDE — confirm the VM is SeaBIOS with the disk on `ide0` (the script sets this). |
+| OOBE asks for input instead of running unattended | The answer file wasn't picked up; confirm the VHD is a generalized (sysprep/OOBE) image and re-run. |
 | Runner never appears online | Open `C:\actions-runner-install.log`; confirm the VM has network (E1000/DHCP) and the token was still valid. |
-| First boot stuck at the CD prompt | On a slow host the ~30 s key window can miss — press a key on the console, or widen the `qm sendkey` loop in the script. |

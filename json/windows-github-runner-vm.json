@@ -13,7 +13,7 @@
   "documentation": "https://docs.github.com/en/actions/hosting-your-own-runners",
   "website": "https://github.com/actions/runner",
   "logo": "https://cdn.jsdelivr.net/gh/selfhst/icons@main/webp/github.webp",
-  "description": "Creates a Windows Server 2025 QEMU/KVM VM that installs unattended and registers itself as a self-hosted GitHub Actions runner (Windows service). Windows cannot run in an LXC container, so this is delivered as a VM. The install uses an AHCI disk and E1000 NIC so no VirtIO drivers are needed to complete setup; the VirtIO ISO is attached for optional performance upgrades afterwards.",
+  "description": "Creates a Windows Server 2025 QEMU/KVM VM from Microsoft's pre-built evaluation VHD and registers it as a self-hosted GitHub Actions runner (Windows service). Windows cannot run in an LXC container, so this is delivered as a VM. Importing the VHD skips Windows Setup entirely: the answer file and runner script are injected offline with virt-customize, and first boot runs OOBE unattended. The eval VHD is Generation 1, so the VM uses SeaBIOS with a driver-free IDE disk and E1000 NIC.",
   "install_methods": [
     {
       "type": "default",
@@ -34,7 +34,7 @@
   },
   "notes": [
     {
-      "text": "Upload a Windows Server 2025 ISO to an ISO-content storage before running; the script lists available ISOs for selection.",
+      "text": "Download the Windows Server 2025 evaluation VHD from the Microsoft Evaluation Center first, then give the script its path on the host (or an https URL reachable from the host).",
       "type": "warning"
     },
     {
@@ -42,7 +42,7 @@
       "type": "info"
     },
     {
-      "text": "The first boot's 'Press any key to boot from CD...' prompt is auto-confirmed via qm sendkey when the VM is started by the script; if you start the VM yourself, press a key at that prompt for the first boot only.",
+      "text": "The evaluation VHD is Generation 1, so the VM uses SeaBIOS with a driver-free IDE disk and E1000 NIC. Install VirtIO drivers + the QEMU guest agent afterwards and switch to virtio-scsi/virtio-net for better performance.",
       "type": "info"
     },
     {

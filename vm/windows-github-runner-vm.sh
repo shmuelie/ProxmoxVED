@@ -7,11 +7,17 @@
 
 # Windows Server 2025 self-hosted GitHub Actions runner.
 # Windows cannot run in an LXC container, so this ships as a QEMU/KVM VM.
-# The install is fully unattended (autounattend.xml). To stay driver-free during
-# WinPE the OS disk is AHCI (sata) and the NIC is E1000E - both have in-box
-# Windows drivers - so no VirtIO drivers are needed to complete setup. The
-# VirtIO ISO is still attached so the disk/NIC can be switched to VirtIO and the
-# guest agent installed afterwards for better performance.
+#
+# This uses Microsoft's pre-built Windows Server 2025 *evaluation VHD* instead of
+# an ISO install: the disk is imported and boots straight to OOBE, so there is no
+# Windows Setup, no "press any key to boot from CD", and no image-index guessing.
+# The unattend answer file and the runner install script are injected into the
+# VHD offline with virt-customize, so first boot runs OOBE unattended and the
+# runner registers itself as a Windows service.
+#
+# The eval VHD is Generation 1 (BIOS/MBR), so the VM uses SeaBIOS with an IDE
+# boot disk and an E1000 NIC - all driver-free for a Hyper-V Gen1 image. Switch
+# to VirtIO + the guest agent afterwards for better performance if desired.
 
 source /dev/stdin <<<$(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/api/api.func")
 source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/pve/vm-core.func")
@@ -26,7 +32,7 @@ function header_info {
  | | |_ | | __| __| | | | | '_ \  |  __| | | | '_ \| '_ \ / _ \ '__|
  | |__| | | |_| |_| | |_| | |_) | | |  | |_| | | | | | | |  __/ |
   \_____|_|\__|\__|_|\__,_|_.__/  |_|   \__,_|_| |_|_| |_|\___|_|
-        Windows Server 2025 Self-Hosted Runner
+        Windows Server 2025 Self-Hosted Runner (VHD)
 EOF
 }
 header_info
@@ -42,7 +48,6 @@ var_version="2025"
 # RUNNER SETTINGS
 # ==============================================================================
 function runner_settings() {
-  # GitHub URL
   while true; do
     if RUNNER_URL=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox \
       "GitHub URL to register the runner against\n(e.g. https://github.com/OWNER/REPO or https://github.com/ORG)" \
@@ -58,7 +63,6 @@ function runner_settings() {
     fi
   done
 
-  # Registration token
   while true; do
     if RUNNER_TOKEN=$(whiptail --backtitle "Proxmox VE Helper Scripts" --passwordbox \
       "Runner registration token\n(Settings -> Actions -> Runners -> New self-hosted runner)" \
@@ -74,7 +78,6 @@ function runner_settings() {
     fi
   done
 
-  # Runner name
   if RUNNER_NAME=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox \
     "Runner name" 8 58 "${HN}" --title "RUNNER NAME" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
     [ -z "$RUNNER_NAME" ] && RUNNER_NAME="$HN"
@@ -83,7 +86,6 @@ function runner_settings() {
     exit_script
   fi
 
-  # Labels
   if RUNNER_LABELS=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox \
     "Additional runner labels (comma-separated)" 8 68 "self-hosted,windows,x64,windows-2025" \
     --title "RUNNER LABELS" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
@@ -99,7 +101,6 @@ function runner_settings() {
 # ==============================================================================
 function default_settings() {
   VMID=$(get_valid_nextid)
-  MACHINE=" -machine q35"
   DISK_CACHE=""
   DISK_SIZE="60G"
   HN="win-runner"
@@ -110,7 +111,6 @@ function default_settings() {
   MAC="$GEN_MAC"
   VLAN=""
   MTU=""
-  IMAGE_INDEX="2"
   START_VM="yes"
   METHOD="default"
 
@@ -121,7 +121,6 @@ function default_settings() {
   echo -e "${RAMSIZE}${BOLD}${DGN}RAM Size: ${BGN}${RAM_SIZE}${CL}"
   echo -e "${BRIDGE}${BOLD}${DGN}Bridge: ${BGN}${BRG}${CL}"
   echo -e "${MACADDRESS}${BOLD}${DGN}MAC Address: ${BGN}${MAC}${CL}"
-  echo -e "${INFO}${BOLD}${DGN}Windows Image Index: ${BGN}${IMAGE_INDEX} (Standard, Desktop Experience)${CL}"
   echo -e "${GATEWAY}${BOLD}${DGN}Start VM when completed: ${BGN}yes${CL}"
   runner_settings
   echo -e "${CREATING}${BOLD}${DGN}Creating a Windows GitHub Runner VM using the above settings${CL}"
@@ -130,7 +129,6 @@ function default_settings() {
 function advanced_settings() {
   METHOD="advanced"
   [ -z "${VMID:-}" ] && VMID=$(get_valid_nextid)
-  MACHINE=" -machine q35"
   CPU_TYPE=" -cpu host"
   DISK_CACHE=""
 
@@ -232,15 +230,6 @@ function advanced_settings() {
   fi
   MTU=""
 
-  if IMAGE_INDEX=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox \
-    "WIM image index to install\n2 = Standard (Desktop Experience)\n4 = Datacenter (Desktop Experience)" \
-    10 58 "2" --title "IMAGE INDEX" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
-    [[ "$IMAGE_INDEX" =~ ^[0-9]+$ ]] || IMAGE_INDEX="2"
-    echo -e "${INFO}${BOLD}${DGN}Windows Image Index: ${BGN}$IMAGE_INDEX${CL}"
-  else
-    exit_script
-  fi
-
   if (whiptail --backtitle "Proxmox VE Helper Scripts" --title "START VIRTUAL MACHINE" --yesno "Start VM when completed?" 10 58); then
     START_VM="yes"
   else
@@ -280,7 +269,7 @@ check_root
 arch_check
 pve_check
 
-if ! whiptail --backtitle "Proxmox VE Helper Scripts" --title "Windows GitHub Runner VM" --yesno "This will create a New Windows Server 2025 GitHub Runner VM. Proceed?" 10 58; then
+if ! whiptail --backtitle "Proxmox VE Helper Scripts" --title "Windows GitHub Runner VM" --yesno "This will create a New Windows Server 2025 GitHub Runner VM from an evaluation VHD. Proceed?" 10 68; then
   header_info && echo -e "${CROSS}${RD}User exited script${CL}\n" && exit
 fi
 
@@ -288,7 +277,7 @@ start_script
 post_to_api_vm
 
 # ==============================================================================
-# STORAGE SELECTION (for the VM disk)
+# STORAGE SELECTION (for the imported VM disk)
 # ==============================================================================
 msg_info "Validating Storage"
 while read -r line; do
@@ -323,117 +312,71 @@ msg_ok "Using ${CL}${BL}$STORAGE${CL} ${GN}for Storage Location."
 msg_ok "Virtual Machine ID is ${CL}${BL}$VMID${CL}."
 
 # ==============================================================================
-# WINDOWS ISO SELECTION (must already be uploaded to an ISO-content storage)
+# VHD SOURCE (local path or https URL to the Server 2025 evaluation VHD)
 # ==============================================================================
-msg_info "Scanning for a Windows Server 2025 ISO"
-WIN_ISO_MENU=()
-while read -r isostore; do
-  while read -r vol; do
-    [ -z "$vol" ] && continue
-    WIN_ISO_MENU+=("$vol" "$(basename "$vol")" "OFF")
-  done < <(pvesm list "$isostore" --content iso 2>/dev/null | awk 'NR>1 {print $1}')
-done < <(pvesm status -content iso | awk 'NR>1 {print $1}')
-
-if [ ${#WIN_ISO_MENU[@]} -eq 0 ]; then
-  msg_error "No ISO images found. Upload a Windows Server 2025 ISO to a storage (content: ISO) and re-run."
-  exit 1
-fi
-msg_ok "Found $((${#WIN_ISO_MENU[@]} / 3)) ISO image(s)"
-
-WIN_ISO_REF=$(whiptail --backtitle "Proxmox VE Helper Scripts" --title "WINDOWS ISO" --radiolist \
-  "Select the Windows Server 2025 installation ISO" 20 78 10 \
-  "${WIN_ISO_MENU[@]}" 3>&1 1>&2 2>&3) || exit_script
-[ -z "$WIN_ISO_REF" ] && {
-  msg_error "No Windows ISO selected."
-  exit 1
-}
-ISO_STORAGE="${WIN_ISO_REF%%:*}"
-ISO_DIR="$(dirname "$(pvesm path "$WIN_ISO_REF")")"
-msg_ok "Using Windows ISO ${CL}${BL}${WIN_ISO_REF}${CL}"
-
-# ==============================================================================
-# PREREQUISITES (host tooling to build the unattend ISO)
-# ==============================================================================
-if command -v genisoimage &>/dev/null; then
-  MKISO="genisoimage"
-elif command -v xorriso &>/dev/null; then
-  MKISO="xorriso -as mkisofs"
+if VHD_SRC=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox \
+  "Path or https:// URL to the Windows Server 2025 evaluation VHD.\n\nDownload it from the Microsoft Evaluation Center and either place it on this host or host it at a URL reachable from here." \
+  12 78 "" --title "WINDOWS SERVER 2025 VHD" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
+  [ -z "$VHD_SRC" ] && {
+    msg_error "A VHD path or URL is required."
+    exit 1
+  }
 else
-  msg_info "Installing genisoimage"
+  exit_script
+fi
+
+# ==============================================================================
+# PREREQUISITES
+# ==============================================================================
+if ! command -v virt-customize &>/dev/null; then
+  msg_info "Installing libguestfs-tools"
   apt-get -qq update >/dev/null
-  apt-get -qq install genisoimage -y >/dev/null
-  MKISO="genisoimage"
-  msg_ok "Installed genisoimage"
+  apt-get -qq install libguestfs-tools -y >/dev/null
+  msg_ok "Installed libguestfs-tools"
 fi
 
 # ==============================================================================
-# VIRTIO ISO (optional, attached so drivers/guest-agent can be installed later)
+# OBTAIN VHD
 # ==============================================================================
-VIRTIO_FILE="$ISO_DIR/virtio-win.iso"
-if [[ ! -s "$VIRTIO_FILE" ]]; then
-  msg_info "Downloading VirtIO drivers ISO"
-  curl -f#SL -o "$VIRTIO_FILE" "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso"
-  echo -en "\e[1A\e[0K"
-  msg_ok "Downloaded VirtIO drivers ISO"
+CACHE_DIR="/var/lib/vz/template/cache"
+mkdir -p "$CACHE_DIR"
+if [[ "$VHD_SRC" =~ ^https?:// ]]; then
+  CACHE_FILE="$CACHE_DIR/$(basename "${VHD_SRC%%\?*}")"
+  if [[ ! -s "$CACHE_FILE" ]]; then
+    msg_info "Downloading Windows Server 2025 VHD (this is large)"
+    curl -f#SL -o "$CACHE_FILE" "$VHD_SRC"
+    echo -en "\e[1A\e[0K"
+    msg_ok "Downloaded ${CL}${BL}$(basename "$CACHE_FILE")${CL}"
+  else
+    msg_ok "Using cached VHD ${CL}${BL}$(basename "$CACHE_FILE")${CL}"
+  fi
+  SRC_FILE="$CACHE_FILE"
 else
-  msg_ok "Using cached VirtIO drivers ISO"
+  if [[ ! -s "$VHD_SRC" ]]; then
+    msg_error "VHD not found at: $VHD_SRC"
+    exit 1
+  fi
+  SRC_FILE="$VHD_SRC"
+  msg_ok "Using local VHD ${CL}${BL}${SRC_FILE}${CL}"
 fi
 
+# Work on a copy so the source/cache stays pristine
+msg_info "Preparing a working copy of the VHD"
+WORK_FILE=$(mktemp --suffix=.vhd)
+cp -f "$SRC_FILE" "$WORK_FILE"
+msg_ok "Prepared working copy"
+
 # ==============================================================================
-# BUILD UNATTEND ISO (autounattend.xml + install-runner.ps1)
+# GENERATE ANSWER FILE + RUNNER SCRIPT AND INJECT INTO THE VHD
 # ==============================================================================
-msg_info "Generating unattended install media"
+msg_info "Generating unattended configuration"
 WINHN=$(echo "$HN" | tr -cd 'A-Za-z0-9-' | cut -c1-15)
 ADMIN_PASS="$(openssl rand -base64 18 | tr -dc 'A-Za-z0-9' | cut -c1-14)Aa1!"
-UNATTEND_DIR=$(mktemp -d)
-mkdir -p "$UNATTEND_DIR/scripts"
+INJECT_DIR=$(mktemp -d)
 
-cat <<'AUTOUNATTEND' >"$UNATTEND_DIR/autounattend.xml"
+cat <<'UNATTEND' >"$INJECT_DIR/unattend.xml"
 <?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend">
-  <settings pass="windowsPE">
-    <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-      <SetupUILanguage><UILanguage>en-US</UILanguage></SetupUILanguage>
-      <InputLocale>en-US</InputLocale>
-      <SystemLocale>en-US</SystemLocale>
-      <UILanguage>en-US</UILanguage>
-      <UserLocale>en-US</UserLocale>
-    </component>
-    <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-      <DiskConfiguration>
-        <Disk wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-          <DiskID>0</DiskID>
-          <WillWipeDisk>true</WillWipeDisk>
-          <CreatePartitions>
-            <CreatePartition wcm:action="add"><Order>1</Order><Type>EFI</Type><Size>260</Size></CreatePartition>
-            <CreatePartition wcm:action="add"><Order>2</Order><Type>MSR</Type><Size>16</Size></CreatePartition>
-            <CreatePartition wcm:action="add"><Order>3</Order><Type>Primary</Type><Extend>true</Extend></CreatePartition>
-          </CreatePartitions>
-          <ModifyPartitions>
-            <ModifyPartition wcm:action="add"><Order>1</Order><PartitionID>1</PartitionID><Format>FAT32</Format><Label>System</Label></ModifyPartition>
-            <ModifyPartition wcm:action="add"><Order>2</Order><PartitionID>2</PartitionID></ModifyPartition>
-            <ModifyPartition wcm:action="add"><Order>3</Order><PartitionID>3</PartitionID><Format>NTFS</Format><Label>Windows</Label><Letter>C</Letter></ModifyPartition>
-          </ModifyPartitions>
-        </Disk>
-      </DiskConfiguration>
-      <ImageInstall>
-        <OSImage>
-          <InstallFrom>
-            <MetaData wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-              <Key>/IMAGE/INDEX</Key>
-              <Value>__IMAGEINDEX__</Value>
-            </MetaData>
-          </InstallFrom>
-          <InstallTo><DiskID>0</DiskID><PartitionID>3</PartitionID></InstallTo>
-        </OSImage>
-      </ImageInstall>
-      <UserData>
-        <AcceptEula>true</AcceptEula>
-        <FullName>Administrator</FullName>
-        <Organization>community-scripts</Organization>
-      </UserData>
-    </component>
-  </settings>
   <settings pass="specialize">
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <ComputerName>__COMPUTERNAME__</ComputerName>
@@ -472,22 +415,26 @@ cat <<'AUTOUNATTEND' >"$UNATTEND_DIR/autounattend.xml"
         <SynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
           <Order>1</Order>
           <Description>Install GitHub Actions runner</Description>
-          <CommandLine>powershell -ExecutionPolicy Bypass -NoProfile -Command "$p=(Get-PSDrive -PSProvider FileSystem|%{Join-Path $_.Root 'scripts\install-runner.ps1'}|?{Test-Path $_}|Select-Object -First 1);if($p){. $p}"</CommandLine>
+          <CommandLine>powershell -ExecutionPolicy Bypass -NoProfile -File C:\actions-runner-install.ps1</CommandLine>
           <RequiresUserInput>false</RequiresUserInput>
         </SynchronousCommand>
       </FirstLogonCommands>
     </component>
   </settings>
 </unattend>
-AUTOUNATTEND
+UNATTEND
 
-cat <<'RUNNERPS1' >"$UNATTEND_DIR/scripts/install-runner.ps1"
+cat <<'RUNNERPS1' >"$INJECT_DIR/install-runner.ps1"
 $ErrorActionPreference = 'Stop'
+Start-Transcript -Path 'C:\actions-runner-install.log' -Append
+
+# The imported disk may be larger than the VHD's virtual size; grow C: into it.
+"select volume c`r`nextend" | diskpart | Out-Null
+
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $dir = 'C:\actions-runner'
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 Set-Location $dir
-Start-Transcript -Path 'C:\actions-runner-install.log' -Append
 
 $rel = $null
 for ($i = 0; $i -lt 30; $i++) {
@@ -507,8 +454,7 @@ Remove-Item "$dir\runner.zip" -Force
 Stop-Transcript
 RUNNERPS1
 
-# Substitute placeholders with literal bash replacement (safe for user input
-# that may contain sed-special characters like & # or \).
+# Literal placeholder substitution (safe for user input with & # or \)
 _subst_file() {
   local file="$1"
   shift
@@ -520,41 +466,82 @@ _subst_file() {
   done
   printf '%s\n' "$content" >"$file"
 }
-_subst_file "$UNATTEND_DIR/autounattend.xml" \
-  "__IMAGEINDEX__" "$IMAGE_INDEX" \
+_subst_file "$INJECT_DIR/unattend.xml" \
   "__COMPUTERNAME__" "$WINHN" \
   "__ADMINPASS__" "$ADMIN_PASS"
-_subst_file "$UNATTEND_DIR/scripts/install-runner.ps1" \
+_subst_file "$INJECT_DIR/install-runner.ps1" \
   "__URL__" "$RUNNER_URL" \
   "__TOKEN__" "$RUNNER_TOKEN" \
   "__NAME__" "$RUNNER_NAME" \
   "__LABELS__" "$RUNNER_LABELS"
+msg_ok "Generated unattended configuration"
 
-UNATTEND_ISO="$ISO_DIR/${VMID}-github-runner-unattend.iso"
-$MKISO -quiet -J -r -V UNATTEND -o "$UNATTEND_ISO" "$UNATTEND_DIR" >/dev/null 2>&1
-rm -rf "$UNATTEND_DIR"
-msg_ok "Generated unattended install media"
+msg_info "Injecting configuration into the VHD"
+export LIBGUESTFS_BACKEND=direct
+# Windows reads the answer file from %WINDIR%\Panther during specialize/OOBE.
+# Upload to both Panther and the Sysprep dir for reliability, plus the runner
+# script to the root of C:.
+if ! virt-customize -a "$WORK_FILE" \
+  --upload "$INJECT_DIR/unattend.xml:/Windows/Panther/unattend.xml" \
+  --upload "$INJECT_DIR/unattend.xml:/Windows/System32/Sysprep/unattend.xml" \
+  --upload "$INJECT_DIR/install-runner.ps1:/actions-runner-install.ps1" >/dev/null 2>&1; then
+  msg_error "Failed to inject configuration into the VHD (is this a valid Windows VHD?)."
+  rm -f "$WORK_FILE"
+  rm -rf "$INJECT_DIR"
+  exit 1
+fi
+rm -rf "$INJECT_DIR"
+msg_ok "Injected configuration into the VHD"
 
 # ==============================================================================
-# VM CREATION
+# VM CREATION (Gen1: SeaBIOS + IDE boot disk, driver-free NIC)
 # ==============================================================================
 msg_info "Creating Windows VM shell"
-DISK_GB="${DISK_SIZE%G}"
-
-qm create $VMID -agent enabled=1${MACHINE}${CPU_TYPE} -cores $CORE_COUNT -memory $RAM_SIZE \
-  -name $HN -tags community-script,ci -ostype win11 -bios ovmf -vga std -scsihw virtio-scsi-pci \
+qm create $VMID -agent enabled=1${CPU_TYPE} -cores $CORE_COUNT -memory $RAM_SIZE \
+  -name $HN -tags community-script,ci -ostype win11 -bios seabios -vga std \
   -net0 e1000,bridge=$BRG,macaddr=$MAC$VLAN$MTU -onboot 1 >/dev/null
 msg_ok "Created VM shell"
 
-msg_info "Attaching disks and installation media"
-qm set $VMID \
-  --efidisk0 "${STORAGE}:0,efitype=4m,pre-enrolled-keys=0" \
-  --sata0 "${STORAGE}:${DISK_GB},${DISK_CACHE}ssd=1" \
-  --ide2 "${WIN_ISO_REF},media=cdrom" \
-  --sata1 "${ISO_STORAGE}:iso/$(basename "$UNATTEND_ISO"),media=cdrom" \
-  --sata2 "${ISO_STORAGE}:iso/virtio-win.iso,media=cdrom" \
-  --boot "order=ide2;sata0" >/dev/null
-msg_ok "Attached disks and installation media"
+# ==============================================================================
+# DISK IMPORT
+# ==============================================================================
+msg_info "Importing VHD into storage ($STORAGE)"
+STORAGE_TYPE=$(pvesm status -storage "$STORAGE" | awk 'NR>1 {print $2}')
+case $STORAGE_TYPE in
+nfs | dir) DISK_IMPORT="--format qcow2" ;;
+btrfs) DISK_IMPORT="--format raw" ;;
+*) DISK_IMPORT="--format raw" ;;
+esac
+
+if qm disk import --help >/dev/null 2>&1; then
+  IMPORT_CMD=(qm disk import)
+else
+  IMPORT_CMD=(qm importdisk)
+fi
+
+IMPORT_OUT="$("${IMPORT_CMD[@]}" "$VMID" "$WORK_FILE" "$STORAGE" ${DISK_IMPORT:-} 2>&1 || true)"
+DISK_REF="$(printf '%s\n' "$IMPORT_OUT" | sed -n "s/.*successfully imported disk '\([^']\+\)'.*/\1/p" | tr -d "\r\"'")"
+[[ -z "$DISK_REF" ]] && DISK_REF="$(pvesm list "$STORAGE" | awk -v id="$VMID" '$5 ~ ("vm-"id"-disk-") {print $1":"$5}' | sort | tail -n1)"
+rm -f "$WORK_FILE"
+[[ -z "$DISK_REF" ]] && {
+  msg_error "Unable to determine imported disk reference."
+  echo "$IMPORT_OUT"
+  exit 1
+}
+msg_ok "Imported disk (${CL}${BL}${DISK_REF}${CL})"
+
+# ==============================================================================
+# VM CONFIGURATION
+# ==============================================================================
+msg_info "Attaching disk"
+qm set "$VMID" \
+  --ide0 "${DISK_REF},${DISK_CACHE}" \
+  --boot "order=ide0" >/dev/null
+
+# Grow the imported disk to the requested size (only ever expands)
+DISK_GB="${DISK_SIZE%G}"
+qm disk resize "$VMID" ide0 "${DISK_GB}G" >/dev/null 2>&1 || true
+msg_ok "Attached disk"
 
 set_description
 
@@ -565,20 +552,6 @@ if [ "$START_VM" == "yes" ]; then
   msg_info "Starting Windows GitHub Runner VM"
   qm start $VMID >/dev/null 2>&1
   msg_ok "Started Windows GitHub Runner VM"
-
-  # The Windows ISO shows "Press any key to boot from CD or DVD..." on the first
-  # boot. Auto-confirm it with qm sendkey instead of asking the user to watch the
-  # console. The window is deliberately short (~30s): it only needs to catch this
-  # first prompt, and it finishes long before Setup reaches its first reboot - so
-  # it can never re-trigger the (disk-wiping) installer. On later reboots the CD
-  # prompt simply times out and the boot order (ide2;sata0) falls through to the
-  # now-bootable disk, so no keypress is needed there.
-  msg_info "Confirming boot from installation media"
-  for _ in $(seq 1 15); do
-    qm sendkey "$VMID" ret >/dev/null 2>&1 || true
-    sleep 2
-  done
-  msg_ok "Unattended installation started"
 fi
 
 # ==============================================================================
@@ -587,18 +560,13 @@ fi
 echo -e "\n${INFO}${BOLD}${GN}Windows GitHub Runner VM Configuration Summary:${CL}"
 echo -e "${TAB}${DGN}VM ID: ${BGN}${VMID}${CL}"
 echo -e "${TAB}${DGN}Hostname: ${BGN}${HN}${CL}"
-echo -e "${TAB}${DGN}OS: ${BGN}Windows Server 2025${CL}"
+echo -e "${TAB}${DGN}OS: ${BGN}Windows Server 2025 (Evaluation VHD)${CL}"
 echo -e "${TAB}${DGN}Runner URL: ${BGN}${RUNNER_URL}${CL}"
 echo -e "${TAB}${DGN}Runner Name: ${BGN}${RUNNER_NAME}${CL}"
 echo -e "${TAB}${DGN}Runner Labels: ${BGN}${RUNNER_LABELS}${CL}"
 echo -e "${TAB}${DGN}Administrator Password: ${BGN}${ADMIN_PASS}${CL}"
 echo -e "${TAB}${YW}Save the Administrator password now - it is not stored anywhere else.${CL}"
-if [ "$START_VM" == "yes" ]; then
-  echo -e "${TAB}${GN}Boot from installation media was auto-confirmed - setup is running unattended.${CL}"
-else
-  echo -e "${TAB}${YW}When you start the VM, press a key at 'Press any key to boot from CD...' (first boot only).${CL}"
-fi
-echo -e "${TAB}${YW}Setup runs unattended; the runner registers automatically on first logon (log: C:\\actions-runner-install.log).${CL}"
+echo -e "${TAB}${YW}First boot runs OOBE unattended, then the runner registers automatically (log: C:\\actions-runner-install.log).${CL}"
 
 post_update_to_api "done" "none"
 msg_ok "Completed successfully!\n"
