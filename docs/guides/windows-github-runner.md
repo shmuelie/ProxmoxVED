@@ -29,20 +29,23 @@ entirely — the disk boots straight to OOBE — so there is **no install ISO, n
 1. Prompts for VM resources (ID, cores, RAM, disk, bridge, MAC/VLAN) and runner
    settings (GitHub URL, registration token, runner name, labels).
 2. Asks for the path/URL to the evaluation VHD.
-3. Copies the VHD to a working file and injects, offline with `virt-customize`:
+3. Copies the disk to a qcow2 working file (`qemu-img convert`, handles VHDX/VHD)
+   and injects, offline with `virt-customize`:
    - an `unattend.xml` answer file into `\Windows\Panther\` (and the Sysprep dir),
    - an `install-runner.ps1` into `C:\`.
 4. Creates the VM, imports the VHD as the boot disk, and (optionally) starts it.
 5. First boot runs OOBE unattended, auto-logs-in as `Administrator` once, and the
    first-logon command installs and registers the runner as a Windows service.
 
-### Why Gen1 / SeaBIOS / IDE
+### Why Gen2 / OVMF / SATA
 
-The Microsoft evaluation VHD is a **Generation 1** image (BIOS/MBR), so the VM is
-created with **SeaBIOS**, an **IDE** boot disk, and an **E1000** NIC. These all
-have in-box Windows drivers, so the imported image boots and gets on the network
-with no driver injection. For better performance, install the VirtIO drivers and
-the QEMU guest agent inside the VM afterwards and switch the disk/NIC to VirtIO.
+The Microsoft evaluation VHDX is a **Generation 2** image (UEFI/GPT), so the VM
+is created with **OVMF/UEFI** on **q35**, an **EFI vars disk**, a **SATA** boot
+disk, and an **E1000** NIC. The SATA disk and E1000 NIC have in-box Windows
+drivers, so the imported image boots and gets on the network with no driver
+injection. The VHDX is converted to qcow2 with `qemu-img` before injection and
+import. For better performance, install the VirtIO drivers and the QEMU guest
+agent inside the VM afterwards and switch the disk/NIC to VirtIO.
 
 ## Running it
 
@@ -86,7 +89,7 @@ C:\actions-runner\config.cmd remove --token <NEW_REGISTRATION_TOKEN>
 
 | Symptom | Check |
 | ------- | ----- |
-| "Failed to inject configuration" | The path/URL isn't a valid Windows VHD, or `libguestfs-tools` couldn't mount it. |
-| VM won't boot / INACCESSIBLE_BOOT_DEVICE | The image expects BIOS/IDE — confirm the VM is SeaBIOS with the disk on `ide0` (the script sets this). |
+| "Failed to inject configuration" | The path/URL isn't a valid Windows disk image, or `libguestfs-tools` couldn't mount it. Check the referenced `/tmp/win-runner-virt-customize-<vmid>.log`. |
+| VM won't boot / INACCESSIBLE_BOOT_DEVICE | The Gen2 image needs UEFI + AHCI — confirm the VM is OVMF with the disk on `sata0` (the script sets this). |
 | OOBE asks for input instead of running unattended | The answer file wasn't picked up; confirm the VHD is a generalized (sysprep/OOBE) image and re-run. |
 | Runner never appears online | Open `C:\actions-runner-install.log`; confirm the VM has network (E1000/DHCP) and the token was still valid. |

@@ -42,7 +42,7 @@
       "type": "info"
     },
     {
-      "text": "The evaluation VHD is Generation 1, so the VM uses SeaBIOS with a driver-free IDE disk and E1000 NIC. Install VirtIO drivers + the QEMU guest agent afterwards and switch to virtio-scsi/virtio-net for better performance.",
+      "text": "The evaluation image is a Generation 2 VHDX (UEFI/GPT), so the VM uses OVMF/UEFI on q35 with a SATA boot disk and an E1000 NIC (all driver-free). The VHDX is converted to qcow2 with qemu-img on import. Install VirtIO drivers + the QEMU guest agent afterwards and switch to virtio-scsi/virtio-net for better performance.",
       "type": "info"
     },
     {

@@ -15,9 +15,10 @@
 # VHD offline with virt-customize, so first boot runs OOBE unattended and the
 # runner registers itself as a Windows service.
 #
-# The eval VHD is Generation 1 (BIOS/MBR), so the VM uses SeaBIOS with an IDE
-# boot disk and an E1000 NIC - all driver-free for a Hyper-V Gen1 image. Switch
-# to VirtIO + the guest agent afterwards for better performance if desired.
+# The eval image is a Generation 2 VHDX (UEFI/GPT), so the VM uses OVMF/UEFI on
+# q35 with a SATA boot disk and an E1000 NIC - all driver-free for the imported
+# image. The VHDX is converted to qcow2 with qemu-img first. Switch to VirtIO +
+# the guest agent afterwards for better performance if desired.
 
 source /dev/stdin <<<$(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/api/api.func")
 source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/pve/vm-core.func")
@@ -335,6 +336,13 @@ if ! command -v virt-customize &>/dev/null; then
   msg_ok "Installed libguestfs-tools"
 fi
 
+if ! command -v qemu-img &>/dev/null; then
+  msg_info "Installing qemu-utils"
+  apt-get -qq update >/dev/null
+  apt-get -qq install qemu-utils -y >/dev/null
+  msg_ok "Installed qemu-utils"
+fi
+
 # ==============================================================================
 # OBTAIN VHD
 # ==============================================================================
@@ -360,11 +368,24 @@ else
   msg_ok "Using local VHD ${CL}${BL}${SRC_FILE}${CL}"
 fi
 
-# Work on a copy so the source/cache stays pristine
-msg_info "Preparing a working copy of the VHD"
-WORK_FILE=$(mktemp --suffix=.vhd)
-cp -f "$SRC_FILE" "$WORK_FILE"
-msg_ok "Prepared working copy"
+# Convert the source disk to qcow2 so virt-customize and the import operate on a
+# native format. qemu-img reads both VHDX (Gen2 eval image) and VHD; detect the
+# input format from the extension so probing is never ambiguous.
+msg_info "Converting source disk to qcow2"
+case "${SRC_FILE,,}" in
+*.vhdx) SRC_FMT="vhdx" ;;
+*.vhd) SRC_FMT="vpc" ;;
+*.qcow2) SRC_FMT="qcow2" ;;
+*.raw | *.img) SRC_FMT="raw" ;;
+*) SRC_FMT="" ;;
+esac
+WORK_FILE=$(mktemp --suffix=.qcow2)
+if [[ -n "$SRC_FMT" ]]; then
+  qemu-img convert -p -f "$SRC_FMT" -O qcow2 "$SRC_FILE" "$WORK_FILE"
+else
+  qemu-img convert -p -O qcow2 "$SRC_FILE" "$WORK_FILE"
+fi
+msg_ok "Converted source disk to qcow2"
 
 # ==============================================================================
 # GENERATE ANSWER FILE + RUNNER SCRIPT AND INJECT INTO THE VHD
@@ -476,29 +497,32 @@ _subst_file "$INJECT_DIR/install-runner.ps1" \
   "__LABELS__" "$RUNNER_LABELS"
 msg_ok "Generated unattended configuration"
 
-msg_info "Injecting configuration into the VHD"
+msg_info "Injecting configuration into the disk image"
 export LIBGUESTFS_BACKEND=direct
+VIRT_LOG="/tmp/win-runner-virt-customize-${VMID}.log"
 # Windows reads the answer file from %WINDIR%\Panther during specialize/OOBE.
 # Upload to both Panther and the Sysprep dir for reliability, plus the runner
 # script to the root of C:.
 if ! virt-customize -a "$WORK_FILE" \
   --upload "$INJECT_DIR/unattend.xml:/Windows/Panther/unattend.xml" \
   --upload "$INJECT_DIR/unattend.xml:/Windows/System32/Sysprep/unattend.xml" \
-  --upload "$INJECT_DIR/install-runner.ps1:/actions-runner-install.ps1" >/dev/null 2>&1; then
-  msg_error "Failed to inject configuration into the VHD (is this a valid Windows VHD?)."
+  --upload "$INJECT_DIR/install-runner.ps1:/actions-runner-install.ps1" >"$VIRT_LOG" 2>&1; then
+  msg_error "Failed to inject configuration into the disk image (see $VIRT_LOG)."
+  tail -n 20 "$VIRT_LOG"
   rm -f "$WORK_FILE"
   rm -rf "$INJECT_DIR"
   exit 1
 fi
 rm -rf "$INJECT_DIR"
-msg_ok "Injected configuration into the VHD"
+msg_ok "Injected configuration into the disk image"
 
 # ==============================================================================
-# VM CREATION (Gen1: SeaBIOS + IDE boot disk, driver-free NIC)
+# VM CREATION (Gen2: OVMF/UEFI, q35, SATA boot disk - all driver-free for the
+# imported image; E1000 NIC has an in-box Windows driver)
 # ==============================================================================
 msg_info "Creating Windows VM shell"
 qm create $VMID -agent enabled=1${CPU_TYPE} -cores $CORE_COUNT -memory $RAM_SIZE \
-  -name $HN -tags community-script,ci -ostype win11 -bios seabios -vga std \
+  -name $HN -tags community-script,ci -ostype win11 -bios ovmf -machine q35 -vga std -scsihw virtio-scsi-pci \
   -net0 e1000,bridge=$BRG,macaddr=$MAC$VLAN$MTU -onboot 1 >/dev/null
 msg_ok "Created VM shell"
 
@@ -534,13 +558,17 @@ msg_ok "Imported disk (${CL}${BL}${DISK_REF}${CL})"
 # VM CONFIGURATION
 # ==============================================================================
 msg_info "Attaching disk"
+# The Gen2 image boots via UEFI, so add an EFI vars disk and put the imported
+# disk on SATA (in-box Windows AHCI driver). pre-enrolled-keys=0 keeps Secure
+# Boot from blocking a generic image.
 qm set "$VMID" \
-  --ide0 "${DISK_REF},${DISK_CACHE}" \
-  --boot "order=ide0" >/dev/null
+  --efidisk0 "${STORAGE}:0,efitype=4m,pre-enrolled-keys=0" \
+  --sata0 "${DISK_REF},${DISK_CACHE}" \
+  --boot "order=sata0" >/dev/null
 
 # Grow the imported disk to the requested size (only ever expands)
 DISK_GB="${DISK_SIZE%G}"
-qm disk resize "$VMID" ide0 "${DISK_GB}G" >/dev/null 2>&1 || true
+qm disk resize "$VMID" sata0 "${DISK_GB}G" >/dev/null 2>&1 || true
 msg_ok "Attached disk"
 
 set_description
@@ -560,7 +588,7 @@ fi
 echo -e "\n${INFO}${BOLD}${GN}Windows GitHub Runner VM Configuration Summary:${CL}"
 echo -e "${TAB}${DGN}VM ID: ${BGN}${VMID}${CL}"
 echo -e "${TAB}${DGN}Hostname: ${BGN}${HN}${CL}"
-echo -e "${TAB}${DGN}OS: ${BGN}Windows Server 2025 (Evaluation VHD)${CL}"
+echo -e "${TAB}${DGN}OS: ${BGN}Windows Server 2025 (Evaluation VHDX)${CL}"
 echo -e "${TAB}${DGN}Runner URL: ${BGN}${RUNNER_URL}${CL}"
 echo -e "${TAB}${DGN}Runner Name: ${BGN}${RUNNER_NAME}${CL}"
 echo -e "${TAB}${DGN}Runner Labels: ${BGN}${RUNNER_LABELS}${CL}"
