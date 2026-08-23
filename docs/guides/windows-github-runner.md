@@ -62,21 +62,32 @@ immediately, it is not stored anywhere else.
 ## Saving user defaults (`.vars`)
 
 Reusable settings can be persisted so you don't re-enter them each time, following
-the community-scripts app-defaults pattern:
+the community-scripts defaults pattern. Two files are consulted, the app file
+overriding the shared global one:
 
-- After you complete **Advanced** settings, the script offers to save them to
-  `/usr/local/community-scripts/defaults/windows-github-runner-vm.vars`. If the
-  file already exists and differs, you get an Update / Keep / View Diff / Cancel
-  menu.
+- **global** `/usr/local/community-scripts/default.vars` — shared by all
+  community-scripts (also searched at `~/.config/community-scripts/default.vars`
+  and `./default.vars`). Only the keys this script understands are read; anything
+  else (e.g. container-only keys) is ignored.
+- **app** `/usr/local/community-scripts/defaults/windows-github-runner-vm.vars` —
+  specific to this script.
+
+Behaviour:
+
+- After you complete **Advanced** settings, the script offers to save them to the
+  **app** file. If it already exists and differs, you get an Update / Keep / View
+  Diff / Cancel menu.
 - On the next run those values seed the prompts (both Default and Advanced).
-- Precedence is **environment `var_*` > the `.vars` file > the built-in defaults**,
-  so you can also export a value (e.g. `var_cpu=8`) for a one-off override.
-- Saved keys: `var_cpu`, `var_ram`, `var_disk`, `var_hostname`, `var_brg`,
+- Precedence is **environment `var_*` > app `.vars` > global `default.vars` >
+  built-in defaults**, so you can export a value (e.g. `var_cpu=8`) for a one-off
+  override, keep host-wide settings like `var_brg` in the global file, and
+  per-runner settings in the app file.
+- Saved (app) keys: `var_cpu`, `var_ram`, `var_disk`, `var_hostname`, `var_brg`,
   `var_vlan`, `var_runner_url`, `var_runner_labels`. The **registration token is a
   secret and single-use, so it is never saved** — you are always prompted for it.
 
-You can also create or edit the `.vars` file by hand (one `var_key=value` per line,
-`#` for comments).
+You can also create or edit either `.vars` file by hand (one `var_key=value` per
+line, `#` for comments).
 
 ## After it runs
 

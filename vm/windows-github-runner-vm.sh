@@ -49,17 +49,49 @@ var_version="2025"
 # ==============================================================================
 # USER DEFAULTS (.vars)
 #
-# Mirrors the community-scripts app-defaults pattern (build.func): reusable
-# settings are stored as `var_*=value` lines in an app .vars file, loaded to
-# seed the prompts and offered for save after Advanced settings.
-# Precedence: environment `var_*` > the .vars file > the built-in defaults.
+# Mirrors the community-scripts defaults pattern (build.func): reusable settings
+# are stored as `var_*=value` lines. Two files are consulted, the app file
+# overriding the shared global one:
+#   * global: /usr/local/community-scripts/default.vars   (shared by all scripts)
+#   * app:    /usr/local/community-scripts/defaults/windows-github-runner-vm.vars
+# Loaded values seed the prompts; Advanced settings can save the app file.
+# Precedence: environment `var_*` > app .vars > global default.vars > built-ins.
 # The registration token is a secret and single-use, so it is never saved.
 # ==============================================================================
 APP_DEFAULTS_PATH="/usr/local/community-scripts/defaults/windows-github-runner-vm.vars"
+GLOBAL_DEFAULTS_CANDIDATES=(
+  /usr/local/community-scripts/default.vars
+  "$HOME/.config/community-scripts/default.vars"
+  ./default.vars
+)
 VARS_WHITELIST=(var_cpu var_ram var_disk var_hostname var_brg var_vlan var_runner_url var_runner_labels)
+declare -A _HARD_ENV=()
 
-load_app_defaults() {
-  local file="$APP_DEFAULTS_PATH"
+_find_global_defaults() {
+  local f
+  for f in "${GLOBAL_DEFAULTS_CANDIDATES[@]}"; do
+    [ -f "$f" ] && {
+      echo "$f"
+      return 0
+    }
+  done
+  return 1
+}
+
+# Record which whitelisted var_* came from the environment; those always win.
+_snapshot_env_vars() {
+  local w
+  for w in "${VARS_WHITELIST[@]}"; do
+    printenv "$w" >/dev/null 2>&1 && _HARD_ENV["$w"]=1
+  done
+  return 0
+}
+
+# Parse one .vars file. force=yes overwrites a value already set by a
+# lower-precedence file (used for the app file so it beats the global one);
+# environment values are never overwritten.
+_load_vars_file() {
+  local file="$1" force="${2:-no}"
   [ -f "$file" ] || return 0
   local line key val w ok
   while IFS= read -r line || [ -n "$line" ]; do
@@ -71,12 +103,24 @@ load_app_defaults() {
     ok=0
     for w in "${VARS_WHITELIST[@]}"; do [ "$w" = "$key" ] && ok=1 && break; done
     [ $ok -eq 1 ] || continue
+    [[ -n "${_HARD_ENV[$key]:-}" ]] && continue
     [[ "$val" =~ ^\"(.*)\"$ ]] && val="${BASH_REMATCH[1]}"
     [[ "$val" =~ ^\'(.*)\'$ ]] && val="${BASH_REMATCH[1]}"
-    # Only set if not already provided via the environment (env wins).
-    [[ -z "${!key+x}" ]] && printf -v "$key" '%s' "$val" && export "$key"
+    if [[ "$force" == "yes" || -z "${!key+x}" ]]; then
+      printf -v "$key" '%s' "$val"
+      export "$key"
+    fi
   done <"$file"
   msg_ok "Loaded defaults from ${CL}${BL}${file}${CL}"
+}
+
+load_app_defaults() {
+  _snapshot_env_vars
+  local g
+  if g="$(_find_global_defaults)"; then
+    _load_vars_file "$g" "no"
+  fi
+  _load_vars_file "$APP_DEFAULTS_PATH" "yes"
 }
 
 # Compute the seed defaults used by the prompts (loaded .vars value or built-in).
