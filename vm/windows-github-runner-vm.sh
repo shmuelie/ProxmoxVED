@@ -472,7 +472,25 @@ Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "$dir\runner.zip"
 Expand-Archive -Path "$dir\runner.zip" -DestinationPath $dir -Force
 Remove-Item "$dir\runner.zip" -Force
 
-& "$dir\config.cmd" --unattended --url '__URL__' --token '__TOKEN__' --name '__NAME__' --labels '__LABELS__' --runasservice
+# Dependencies, mirroring the Linux runner install (git + gh). Git is required by
+# actions/checkout and most workflows; both are installed before the service is
+# created so they are on PATH for runner jobs. Best-effort: a failure here still
+# leaves a registered runner rather than aborting.
+try {
+  $g = Invoke-RestMethod -Uri 'https://api.github.com/repos/git-for-windows/git/releases/latest' -Headers @{ 'User-Agent' = 'proxmox-runner' }
+  $ga = $g.assets | Where-Object { $_.name -match '64-bit\.exe$' } | Select-Object -First 1
+  Invoke-WebRequest -Uri $ga.browser_download_url -OutFile "$env:TEMP\git-setup.exe"
+  Start-Process -FilePath "$env:TEMP\git-setup.exe" -ArgumentList '/VERYSILENT', '/NORESTART', '/SP-', '/SUPPRESSMSGBOXES' -Wait
+} catch { Write-Warning "Git for Windows install failed: $_" }
+
+try {
+  $h = Invoke-RestMethod -Uri 'https://api.github.com/repos/cli/cli/releases/latest' -Headers @{ 'User-Agent' = 'proxmox-runner' }
+  $ha = $h.assets | Where-Object { $_.name -match 'windows_amd64\.msi$' } | Select-Object -First 1
+  Invoke-WebRequest -Uri $ha.browser_download_url -OutFile "$env:TEMP\gh.msi"
+  Start-Process msiexec.exe -ArgumentList '/i', "$env:TEMP\gh.msi", '/qn', '/norestart' -Wait
+} catch { Write-Warning "GitHub CLI install failed: $_" }
+
+& "$dir\config.cmd" --unattended --replace --url '__URL__' --token '__TOKEN__' --name '__NAME__' --labels '__LABELS__' --runasservice
 Stop-Transcript
 RUNNERPS1
 

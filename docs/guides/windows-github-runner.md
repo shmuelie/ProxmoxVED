@@ -62,10 +62,11 @@ immediately, it is not stored anywhere else.
 ## After it runs
 
 - The VM boots to OOBE, applies the answer file, and auto-logs-in once.
-- `install-runner.ps1` extends `C:` to fill the disk, downloads the latest
-  `actions/runner`, runs `config.cmd --unattended --runasservice`, and the runner
-  comes up as a Windows service — it should appear **Online** under the repo/org
-  runners.
+- `install-runner.ps1` extends `C:` to fill the disk, installs **Git for Windows**
+  and the **GitHub CLI** (mirroring the Linux runner's `git`/`gh` deps, needed by
+  `actions/checkout` and most workflows), downloads the latest `actions/runner`,
+  runs `config.cmd --unattended --replace --runasservice`, and the runner comes up
+  as a Windows service — it should appear **Online** under the repo/org runners.
 - Progress/troubleshooting log inside the VM: `C:\actions-runner-install.log`.
 
 ## Evaluation edition
