@@ -42,6 +42,7 @@ GEN_MAC=02:$(openssl rand -hex 5 | awk '{print toupper($0)}' | sed 's/\(..\)/\1:
 RANDOM_UUID="$(cat /proc/sys/kernel/random/uuid)"
 METHOD=""
 NSAPP="Windows GitHub Runner VM"
+APP="Windows GitHub Runner"
 var_os="windows"
 var_version="2025"
 
