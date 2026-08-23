@@ -47,13 +47,124 @@ var_os="windows"
 var_version="2025"
 
 # ==============================================================================
+# USER DEFAULTS (.vars)
+#
+# Mirrors the community-scripts app-defaults pattern (build.func): reusable
+# settings are stored as `var_*=value` lines in an app .vars file, loaded to
+# seed the prompts and offered for save after Advanced settings.
+# Precedence: environment `var_*` > the .vars file > the built-in defaults.
+# The registration token is a secret and single-use, so it is never saved.
+# ==============================================================================
+APP_DEFAULTS_PATH="/usr/local/community-scripts/defaults/windows-github-runner-vm.vars"
+VARS_WHITELIST=(var_cpu var_ram var_disk var_hostname var_brg var_vlan var_runner_url var_runner_labels)
+
+load_app_defaults() {
+  local file="$APP_DEFAULTS_PATH"
+  [ -f "$file" ] || return 0
+  local line key val w ok
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    [[ "$line" =~ ^(var_[A-Za-z0-9_]+)=(.*)$ ]] || continue
+    key="${BASH_REMATCH[1]}"
+    val="${BASH_REMATCH[2]}"
+    ok=0
+    for w in "${VARS_WHITELIST[@]}"; do [ "$w" = "$key" ] && ok=1 && break; done
+    [ $ok -eq 1 ] || continue
+    [[ "$val" =~ ^\"(.*)\"$ ]] && val="${BASH_REMATCH[1]}"
+    [[ "$val" =~ ^\'(.*)\'$ ]] && val="${BASH_REMATCH[1]}"
+    # Only set if not already provided via the environment (env wins).
+    [[ -z "${!key+x}" ]] && printf -v "$key" '%s' "$val" && export "$key"
+  done <"$file"
+  msg_ok "Loaded defaults from ${CL}${BL}${file}${CL}"
+}
+
+# Compute the seed defaults used by the prompts (loaded .vars value or built-in).
+seed_defaults() {
+  DEF_CPU="${var_cpu:-4}"
+  DEF_RAM="${var_ram:-8192}"
+  DEF_DISK="${var_disk:-64}"
+  DEF_HN="${var_hostname:-win-runner}"
+  DEF_BRG="${var_brg:-vmbr0}"
+  DEF_VLAN="${var_vlan:-}"
+  DEF_RUNNER_URL="${var_runner_url:-https://github.com/}"
+  DEF_RUNNER_LABELS="${var_runner_labels:-self-hosted,windows,x64,windows-2025}"
+}
+
+# Offer to persist the current (advanced) settings as this app's defaults.
+maybe_offer_save_app_defaults() {
+  local file="$APP_DEFAULTS_PATH" tmp
+  tmp="$(mktemp)"
+  cat >"$tmp" <<EOF
+# Community-Scripts app defaults for ${APP} (var_* only).
+# Precedence: ENV var_* > this file > built-in script defaults.
+# The registration token is intentionally never saved here.
+var_cpu=${CORE_COUNT}
+var_ram=${RAM_SIZE}
+var_disk=${DISK_SIZE%G}
+var_hostname=${HN}
+var_brg=${BRG}
+var_vlan=${VLAN#,tag=}
+var_runner_url=${RUNNER_URL}
+var_runner_labels=${RUNNER_LABELS}
+EOF
+
+  if [[ ! -f "$file" ]]; then
+    if whiptail --backtitle "Proxmox VE Helper Scripts" \
+      --yesno "Save these advanced settings as defaults for ${APP}?\n\nThis will create:\n${file}" 12 72; then
+      mkdir -p "$(dirname "$file")"
+      install -m 0644 "$tmp" "$file"
+      msg_ok "Saved app defaults: ${CL}${BL}${file}${CL}"
+    fi
+    rm -f "$tmp"
+    return 0
+  fi
+
+  if diff -q "$file" "$tmp" >/dev/null 2>&1; then
+    rm -f "$tmp"
+    return 0
+  fi
+
+  while true; do
+    local sel
+    sel="$(whiptail --backtitle "Proxmox VE Helper Scripts" --title "APP DEFAULTS - ${APP}" \
+      --menu "Differences detected. What do you want to do?" 20 78 10 \
+      "Update Defaults" "Write new values to $(basename "$file")" \
+      "Keep Current" "Keep existing defaults (no changes)" \
+      "View Diff" "Show a detailed diff" \
+      "Cancel" "Abort without changes" \
+      --default-item "Update Defaults" 3>&1 1>&2 2>&3)" || sel="Cancel"
+    case "$sel" in
+    "Update Defaults")
+      install -m 0644 "$tmp" "$file"
+      msg_ok "Updated app defaults: ${CL}${BL}${file}${CL}"
+      break
+      ;;
+    "Keep Current")
+      break
+      ;;
+    "View Diff")
+      diff -u "$file" "$tmp" >"${tmp}.diff" 2>/dev/null || true
+      whiptail --backtitle "Proxmox VE Helper Scripts" --title "Diff - ${APP}" \
+        --scrolltext --textbox "${tmp}.diff" 25 100
+      rm -f "${tmp}.diff"
+      ;;
+    *)
+      break
+      ;;
+    esac
+  done
+  rm -f "$tmp"
+}
+
+# ==============================================================================
 # RUNNER SETTINGS
 # ==============================================================================
 function runner_settings() {
   while true; do
     if RUNNER_URL=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox \
       "GitHub URL to register the runner against\n(e.g. https://github.com/OWNER/REPO or https://github.com/ORG)" \
-      10 68 "${RUNNER_URL:-https://github.com/}" --title "GITHUB URL" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
+      10 68 "${RUNNER_URL:-$DEF_RUNNER_URL}" --title "GITHUB URL" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
       if [[ "$RUNNER_URL" =~ ^https://github\.com/.+ ]]; then
         echo -e "${INFO}${BOLD}${DGN}GitHub URL: ${BGN}${RUNNER_URL}${CL}"
         break
@@ -89,9 +200,9 @@ function runner_settings() {
   fi
 
   if RUNNER_LABELS=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox \
-    "Additional runner labels (comma-separated)" 8 68 "self-hosted,windows,x64,windows-2025" \
+    "Additional runner labels (comma-separated)" 8 68 "${RUNNER_LABELS:-$DEF_RUNNER_LABELS}" \
     --title "RUNNER LABELS" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
-    [ -z "$RUNNER_LABELS" ] && RUNNER_LABELS="self-hosted,windows,x64,windows-2025"
+    [ -z "$RUNNER_LABELS" ] && RUNNER_LABELS="$DEF_RUNNER_LABELS"
     echo -e "${INFO}${BOLD}${DGN}Runner Labels: ${BGN}${RUNNER_LABELS}${CL}"
   else
     exit_script
@@ -104,14 +215,14 @@ function runner_settings() {
 function default_settings() {
   VMID=$(get_valid_nextid)
   DISK_CACHE=""
-  DISK_SIZE="60G"
-  HN="win-runner"
+  DISK_SIZE="${DEF_DISK}G"
+  HN="$DEF_HN"
   CPU_TYPE=" -cpu host"
-  CORE_COUNT="4"
-  RAM_SIZE="8192"
-  BRG="vmbr0"
+  CORE_COUNT="$DEF_CPU"
+  RAM_SIZE="$DEF_RAM"
+  BRG="$DEF_BRG"
   MAC="$GEN_MAC"
-  VLAN=""
+  [ -n "$DEF_VLAN" ] && VLAN=",tag=$DEF_VLAN" || VLAN=""
   MTU=""
   START_VM="yes"
   METHOD="default"
@@ -149,7 +260,7 @@ function advanced_settings() {
     fi
   done
 
-  if DISK_SIZE=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox "Set Disk Size in GiB (min 40)" 8 58 "60" --title "DISK SIZE" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
+  if DISK_SIZE=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox "Set Disk Size in GiB (min 40)" 8 58 "$DEF_DISK" --title "DISK SIZE" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
     DISK_SIZE=$(echo "$DISK_SIZE" | tr -d ' G')
     if [[ "$DISK_SIZE" =~ ^[0-9]+$ ]] && [ "$DISK_SIZE" -ge 40 ]; then
       DISK_SIZE="${DISK_SIZE}G"
@@ -162,9 +273,9 @@ function advanced_settings() {
     exit_script
   fi
 
-  if VM_NAME=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox "Set Hostname" 8 58 win-runner --title "HOSTNAME" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
+  if VM_NAME=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox "Set Hostname" 8 58 "$DEF_HN" --title "HOSTNAME" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
     if [ -z "$VM_NAME" ]; then
-      HN="win-runner"
+      HN="$DEF_HN"
     else
       HN=$(echo "${VM_NAME,,}" | tr -cs 'a-z0-9-' '-' | sed 's/^-//;s/-$//')
     fi
@@ -174,8 +285,8 @@ function advanced_settings() {
   fi
 
   while true; do
-    if CORE_COUNT=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox "Allocate CPU Cores" 8 58 4 --title "CORE COUNT" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
-      [ -z "$CORE_COUNT" ] && CORE_COUNT="4"
+    if CORE_COUNT=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox "Allocate CPU Cores" 8 58 "$DEF_CPU" --title "CORE COUNT" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
+      [ -z "$CORE_COUNT" ] && CORE_COUNT="$DEF_CPU"
       if [[ "$CORE_COUNT" =~ ^[1-9][0-9]*$ ]]; then
         echo -e "${CPUCORE}${BOLD}${DGN}CPU Cores: ${BGN}$CORE_COUNT${CL}"
         break
@@ -187,8 +298,8 @@ function advanced_settings() {
   done
 
   while true; do
-    if RAM_SIZE=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox "Allocate RAM in MiB (min 4096)" 8 58 8192 --title "RAM" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
-      [ -z "$RAM_SIZE" ] && RAM_SIZE="8192"
+    if RAM_SIZE=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox "Allocate RAM in MiB (min 4096)" 8 58 "$DEF_RAM" --title "RAM" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
+      [ -z "$RAM_SIZE" ] && RAM_SIZE="$DEF_RAM"
       if [[ "$RAM_SIZE" =~ ^[1-9][0-9]*$ ]] && [ "$RAM_SIZE" -ge 4096 ]; then
         echo -e "${RAMSIZE}${BOLD}${DGN}RAM Size: ${BGN}$RAM_SIZE${CL}"
         break
@@ -199,8 +310,8 @@ function advanced_settings() {
     fi
   done
 
-  if BRG=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox "Set a Bridge" 8 58 vmbr0 --title "BRIDGE" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
-    [ -z "$BRG" ] && BRG="vmbr0"
+  if BRG=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox "Set a Bridge" 8 58 "$DEF_BRG" --title "BRIDGE" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
+    [ -z "$BRG" ] && BRG="$DEF_BRG"
     echo -e "${BRIDGE}${BOLD}${DGN}Bridge: ${BGN}$BRG${CL}"
   else
     exit_script
@@ -224,7 +335,7 @@ function advanced_settings() {
     fi
   done
 
-  if VLAN1=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox "Set a Vlan (leave blank for default)" 8 58 --title "VLAN" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
+  if VLAN1=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox "Set a Vlan (leave blank for default)" 8 58 "$DEF_VLAN" --title "VLAN" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
     if [ -z "$VLAN1" ]; then VLAN=""; else VLAN=",tag=$VLAN1"; fi
     echo -e "${VLANTAG}${BOLD}${DGN}VLAN: ${BGN}${VLAN1:-Default}${CL}"
   else
@@ -243,6 +354,7 @@ function advanced_settings() {
 
   if (whiptail --backtitle "Proxmox VE Helper Scripts" --title "ADVANCED SETTINGS COMPLETE" --yesno "Ready to create a Windows GitHub Runner VM?" --no-button Do-Over 10 58); then
     echo -e "${CREATING}${BOLD}${DGN}Creating a Windows GitHub Runner VM using the above advanced settings${CL}"
+    maybe_offer_save_app_defaults
   else
     header_info
     echo -e "${ADVANCED}${BOLD}${RD}Using Advanced Settings${CL}"
@@ -274,6 +386,9 @@ pve_check
 if ! whiptail --backtitle "Proxmox VE Helper Scripts" --title "Windows GitHub Runner VM" --yesno "This will create a New Windows Server 2025 GitHub Runner VM from an evaluation VHD. Proceed?" 10 68; then
   header_info && echo -e "${CROSS}${RD}User exited script${CL}\n" && exit
 fi
+
+load_app_defaults
+seed_defaults
 
 start_script
 post_to_api_vm

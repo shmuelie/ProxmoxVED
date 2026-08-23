@@ -53,11 +53,30 @@ agent inside the VM afterwards and switch the disk/NIC to VirtIO.
 bash vm/windows-github-runner-vm.sh
 ```
 
-Choose **Default** for sensible defaults (4 cores, 8 GiB RAM, 60 GiB disk) or
+Choose **Default** for sensible defaults (4 cores, 8 GiB RAM, 64 GiB disk) or
 **Advanced** to customise everything.
 
 The generated **Administrator password** is printed once at the end — save it
 immediately, it is not stored anywhere else.
+
+## Saving user defaults (`.vars`)
+
+Reusable settings can be persisted so you don't re-enter them each time, following
+the community-scripts app-defaults pattern:
+
+- After you complete **Advanced** settings, the script offers to save them to
+  `/usr/local/community-scripts/defaults/windows-github-runner-vm.vars`. If the
+  file already exists and differs, you get an Update / Keep / View Diff / Cancel
+  menu.
+- On the next run those values seed the prompts (both Default and Advanced).
+- Precedence is **environment `var_*` > the `.vars` file > the built-in defaults**,
+  so you can also export a value (e.g. `var_cpu=8`) for a one-off override.
+- Saved keys: `var_cpu`, `var_ram`, `var_disk`, `var_hostname`, `var_brg`,
+  `var_vlan`, `var_runner_url`, `var_runner_labels`. The **registration token is a
+  secret and single-use, so it is never saved** — you are always prompted for it.
+
+You can also create or edit the `.vars` file by hand (one `var_key=value` per line,
+`#` for comments).
 
 ## After it runs
 
