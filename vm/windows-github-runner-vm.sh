@@ -504,6 +504,8 @@ VIRT_LOG="/tmp/win-runner-virt-customize-${VMID}.log"
 # Upload to both Panther and the Sysprep dir for reliability, plus the runner
 # script to the root of C:.
 if ! virt-customize -a "$WORK_FILE" \
+  --mkdir "/Windows/Panther" \
+  --mkdir "/Windows/System32/Sysprep" \
   --upload "$INJECT_DIR/unattend.xml:/Windows/Panther/unattend.xml" \
   --upload "$INJECT_DIR/unattend.xml:/Windows/System32/Sysprep/unattend.xml" \
   --upload "$INJECT_DIR/install-runner.ps1:/actions-runner-install.ps1" >"$VIRT_LOG" 2>&1; then
