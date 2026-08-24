@@ -751,7 +751,19 @@ DISK_GB="${DISK_SIZE%G}"
 qm disk resize "$VMID" sata0 "${DISK_GB}G" >/dev/null 2>&1 || true
 msg_ok "Attached disk"
 
-set_description
+# Set an ASCII-only description. The framework's set_description embeds emoji
+# (e.g. a heart in a shields.io badge), which makes qm set emit a harmless but
+# noisy "Wide character in print" warning from Perl - so build our own instead.
+VM_DESCRIPTION="<div align='center'>
+  <h2>${APP}</h2>
+  <p>Windows Server 2025 self-hosted GitHub Actions runner</p>
+  <p>
+    <a href='https://github.com/community-scripts/ProxmoxVE' target='_blank' rel='noopener noreferrer'>GitHub</a>
+    &middot;
+    <a href='https://github.com/actions/runner' target='_blank' rel='noopener noreferrer'>actions/runner</a>
+  </p>
+</div>"
+qm set "$VMID" --description "$VM_DESCRIPTION" >/dev/null 2>&1
 
 # ==============================================================================
 # START
