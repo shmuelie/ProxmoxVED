@@ -473,18 +473,35 @@ msg_ok "Using ${CL}${BL}$STORAGE${CL} ${GN}for Storage Location."
 msg_ok "Virtual Machine ID is ${CL}${BL}$VMID${CL}."
 
 # ==============================================================================
-# VHD SOURCE (local path or https URL to the Server 2025 evaluation VHD)
+# VHD/VHDX SELECTION (from /var/lib/vz/template/iso/)
 # ==============================================================================
-if VHD_SRC=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox \
-  "Path or https:// URL to the Windows Server 2025 evaluation VHD.\n\nDownload it from the Microsoft Evaluation Center and either place it on this host or host it at a URL reachable from here." \
-  12 78 "" --title "WINDOWS SERVER 2025 VHD" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
-  [ -z "$VHD_SRC" ] && {
-    msg_error "A VHD path or URL is required."
-    exit 1
-  }
-else
-  exit_script
+VHD_DIR="/var/lib/vz/template/iso"
+msg_info "Scanning ${VHD_DIR} for Windows disk images"
+mapfile -d '' -t VHD_FILES < <(find "$VHD_DIR" -maxdepth 1 -type f \( -iname '*.vhd' -o -iname '*.vhdx' \) -print0 2>/dev/null | sort -z)
+
+if [ ${#VHD_FILES[@]} -eq 0 ]; then
+  msg_error "No .vhd or .vhdx images found in ${VHD_DIR}."
+  msg_error "Download the Windows Server 2025 evaluation VHDX and place it there, then re-run."
+  exit 1
 fi
+msg_ok "Found ${#VHD_FILES[@]} disk image(s) in ${VHD_DIR}"
+
+# Index-based radiolist (tags are numbers) so filenames with spaces are safe.
+VHD_MENU=()
+for i in "${!VHD_FILES[@]}"; do
+  if [ "$i" -eq 0 ]; then _st="ON"; else _st="OFF"; fi
+  VHD_MENU+=("$((i + 1))" "$(basename "${VHD_FILES[$i]}")" "$_st")
+done
+
+VHD_CHOICE=$(whiptail --backtitle "Proxmox VE Helper Scripts" --title "WINDOWS SERVER 2025 VHD/VHDX" --radiolist \
+  "Select the Windows Server 2025 disk image to import.\nUse the Spacebar to select, Enter to confirm.\n" \
+  20 100 10 "${VHD_MENU[@]}" 3>&1 1>&2 2>&3) || exit_script
+[ -z "$VHD_CHOICE" ] && {
+  msg_error "No image selected."
+  exit 1
+}
+SRC_FILE="${VHD_FILES[$((VHD_CHOICE - 1))]}"
+msg_ok "Using image ${CL}${BL}${SRC_FILE}${CL}"
 
 # ==============================================================================
 # PREREQUISITES
@@ -504,30 +521,8 @@ if ! command -v qemu-img &>/dev/null; then
 fi
 
 # ==============================================================================
-# OBTAIN VHD
+# CONVERT SOURCE DISK
 # ==============================================================================
-CACHE_DIR="/var/lib/vz/template/cache"
-mkdir -p "$CACHE_DIR"
-if [[ "$VHD_SRC" =~ ^https?:// ]]; then
-  CACHE_FILE="$CACHE_DIR/$(basename "${VHD_SRC%%\?*}")"
-  if [[ ! -s "$CACHE_FILE" ]]; then
-    msg_info "Downloading Windows Server 2025 VHD (this is large)"
-    curl -f#SL -o "$CACHE_FILE" "$VHD_SRC"
-    echo -en "\e[1A\e[0K"
-    msg_ok "Downloaded ${CL}${BL}$(basename "$CACHE_FILE")${CL}"
-  else
-    msg_ok "Using cached VHD ${CL}${BL}$(basename "$CACHE_FILE")${CL}"
-  fi
-  SRC_FILE="$CACHE_FILE"
-else
-  if [[ ! -s "$VHD_SRC" ]]; then
-    msg_error "VHD not found at: $VHD_SRC"
-    exit 1
-  fi
-  SRC_FILE="$VHD_SRC"
-  msg_ok "Using local VHD ${CL}${BL}${SRC_FILE}${CL}"
-fi
-
 # Convert the source disk to qcow2 so virt-customize and the import operate on a
 # native format. qemu-img reads both VHDX (Gen2 eval image) and VHD; detect the
 # input format from the extension so probing is never ambiguous.

@@ -34,7 +34,7 @@
   },
   "notes": [
     {
-      "text": "Download the Windows Server 2025 evaluation VHD from the Microsoft Evaluation Center first, then give the script its path on the host (or an https URL reachable from the host).",
+      "text": "Download the Windows Server 2025 evaluation VHDX from the Microsoft Evaluation Center and place it in /var/lib/vz/template/iso/. The script lists every .vhd/.vhdx there for selection.",
       "type": "warning"
     },
     {

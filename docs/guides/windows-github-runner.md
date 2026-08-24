@@ -12,28 +12,29 @@ entirely — the disk boots straight to OOBE — so there is **no install ISO, n
 ## Requirements
 
 - A Proxmox VE host (run the script as `root` on the host).
-- The **Windows Server 2025 evaluation VHD**, downloaded from the
-  [Microsoft Evaluation Center](https://www.microsoft.com/en-us/evalcenter/download-windows-server-2025).
-  Place it on the host (any path) or host it at an `https://` URL the host can
-  reach — the script asks for the path/URL. It is not downloaded for you (the
+- The **Windows Server 2025 evaluation VHDX** (or VHD), downloaded from the
+  [Microsoft Evaluation Center](https://www.microsoft.com/en-us/evalcenter/download-windows-server-2025)
+  and placed in **`/var/lib/vz/template/iso/`**. The script lists every `.vhd`/
+  `.vhdx` in that directory for you to pick. It is not downloaded for you (the
   eval download is gated, with no stable direct URL).
 - A **runner registration token** from GitHub
   (repo/org → **Settings → Actions → Runners → New self-hosted runner**).
   Registration tokens are short-lived (~1 hour), so generate one just before running.
 - Free space on the target storage for the imported disk, plus temporary space
-  for a working copy of the VHD.
+  for a working copy of the disk image.
 - Outbound internet from the VM (used on first logon to download the runner).
 
 ## What the script does
 
 1. Prompts for VM resources (ID, cores, RAM, disk, bridge, MAC/VLAN) and runner
    settings (GitHub URL, registration token, runner name, labels).
-2. Asks for the path/URL to the evaluation VHD.
+2. Lists the `.vhd`/`.vhdx` images in `/var/lib/vz/template/iso/` and lets you
+   select one.
 3. Copies the disk to a qcow2 working file (`qemu-img convert`, handles VHDX/VHD)
    and injects, offline with `virt-customize`:
    - an `unattend.xml` answer file into `\Windows\Panther\` (and the Sysprep dir),
    - an `install-runner.ps1` into `C:\`.
-4. Creates the VM, imports the VHD as the boot disk, and (optionally) starts it.
+4. Creates the VM, imports the disk as the boot disk, and (optionally) starts it.
 5. First boot runs OOBE unattended, auto-logs-in as `Administrator` once, and the
    first-logon command installs and registers the runner as a Windows service.
 
@@ -120,7 +121,7 @@ C:\actions-runner\config.cmd remove --token <NEW_REGISTRATION_TOKEN>
 
 | Symptom | Check |
 | ------- | ----- |
-| "Failed to inject configuration" | The path/URL isn't a valid Windows disk image, or `libguestfs-tools` couldn't mount it. Check the referenced `/tmp/win-runner-virt-customize-<vmid>.log`. |
+| "Failed to inject configuration" | The selected file isn't a valid Windows disk image, or `libguestfs-tools` couldn't mount it. Check the referenced `/tmp/win-runner-virt-customize-<vmid>.log`. |
 | VM won't boot / INACCESSIBLE_BOOT_DEVICE | The Gen2 image needs UEFI + AHCI — confirm the VM is OVMF with the disk on `sata0` (the script sets this). |
 | OOBE asks for input instead of running unattended | The answer file wasn't picked up; confirm the VHD is a generalized (sysprep/OOBE) image and re-run. |
 | Runner never appears online | Open `C:\actions-runner-install.log`; confirm the VM has network (E1000/DHCP) and the token was still valid. |
