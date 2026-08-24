@@ -46,6 +46,10 @@
       "type": "info"
     },
     {
+      "text": "Advanced settings can enable Remote Desktop (RDP) and OpenSSH Server (SSH) in the guest (both default to yes). Sign in as Administrator with the generated password; for SSH use ssh Administrator@<vm-ip>.",
+      "type": "info"
+    },
+    {
       "text": "The Administrator password is randomly generated and printed once at the end of the script - save it immediately.",
       "type": "warning"
     }

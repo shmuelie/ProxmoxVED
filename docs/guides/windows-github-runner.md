@@ -26,8 +26,10 @@ entirely — the disk boots straight to OOBE — so there is **no install ISO, n
 
 ## What the script does
 
-1. Prompts for VM resources (ID, cores, RAM, disk, bridge, MAC/VLAN) and runner
-   settings (GitHub URL, registration token, runner name, labels).
+1. Prompts for VM resources (ID, cores, RAM, disk, bridge, MAC/VLAN), runner
+   settings (GitHub URL, registration token, runner name, labels) and whether to
+   enable **Remote Desktop (RDP)** and **OpenSSH Server (SSH)** in the guest
+   (both default to yes in Advanced settings).
 2. Lists the `.vhd`/`.vhdx` images in `/var/lib/vz/template/iso/` and lets you
    select one.
 3. Copies the disk to a qcow2 working file (`qemu-img convert`, handles VHDX/VHD)
@@ -36,7 +38,8 @@ entirely — the disk boots straight to OOBE — so there is **no install ISO, n
    - an `install-runner.ps1` into `C:\`.
 4. Creates the VM, imports the disk as the boot disk, and (optionally) starts it.
 5. First boot runs OOBE unattended, auto-logs-in as `Administrator` once, and the
-   first-logon command installs and registers the runner as a Windows service.
+   first-logon command optionally enables RDP/SSH, then installs and registers the
+   runner as a Windows service.
 
 ### Why Gen2 / OVMF / SATA
 
@@ -84,20 +87,38 @@ Behaviour:
   override, keep host-wide settings like `var_brg` in the global file, and
   per-runner settings in the app file.
 - Saved (app) keys: `var_cpu`, `var_ram`, `var_disk`, `var_hostname`, `var_brg`,
-  `var_vlan`, `var_runner_url`, `var_runner_labels`. The **registration token is a
-  secret and single-use, so it is never saved** — you are always prompted for it.
+  `var_vlan`, `var_runner_url`, `var_runner_labels`, `var_enable_rdp`,
+  `var_enable_ssh`. The **registration token is a secret and single-use, so it is
+  never saved** — you are always prompted for it.
 
 You can also create or edit either `.vars` file by hand (one `var_key=value` per
 line, `#` for comments).
 
+## Remote access (RDP / SSH)
+
+Advanced settings ask whether to enable **Remote Desktop** and **OpenSSH Server**
+in the guest (both default to yes; persisted as `var_enable_rdp` / `var_enable_ssh`).
+On first logon `install-runner.ps1`:
+
+- **RDP** — clears `fDenyTSConnections`, keeps Network Level Authentication on, and
+  enables the *Remote Desktop* firewall group. Connect as `Administrator` with the
+  generated password.
+- **SSH** — installs the `OpenSSH.Server` Windows capability, sets `sshd` to start
+  automatically, starts it, and opens inbound TCP 22. Connect with
+  `ssh Administrator@<vm-ip>`.
+
+Both steps are best-effort: a failure is logged to `C:\actions-runner-install.log`
+but does not block runner registration.
+
 ## After it runs
 
 - The VM boots to OOBE, applies the answer file, and auto-logs-in once.
-- `install-runner.ps1` extends `C:` to fill the disk, installs **Git for Windows**
-  and the **GitHub CLI** (mirroring the Linux runner's `git`/`gh` deps, needed by
-  `actions/checkout` and most workflows), downloads the latest `actions/runner`,
-  runs `config.cmd --unattended --replace --runasservice`, and the runner comes up
-  as a Windows service — it should appear **Online** under the repo/org runners.
+- `install-runner.ps1` extends `C:` to fill the disk, optionally enables RDP/SSH,
+  installs **Git for Windows** and the **GitHub CLI** (mirroring the Linux runner's
+  `git`/`gh` deps, needed by `actions/checkout` and most workflows), downloads the
+  latest `actions/runner`, runs `config.cmd --unattended --replace --runasservice`,
+  and the runner comes up as a Windows service — it should appear **Online** under
+  the repo/org runners.
 - Progress/troubleshooting log inside the VM: `C:\actions-runner-install.log`.
 
 ## Evaluation edition

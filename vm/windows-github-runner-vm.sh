@@ -64,7 +64,7 @@ GLOBAL_DEFAULTS_CANDIDATES=(
   "$HOME/.config/community-scripts/default.vars"
   ./default.vars
 )
-VARS_WHITELIST=(var_cpu var_ram var_disk var_hostname var_brg var_vlan var_runner_url var_runner_labels)
+VARS_WHITELIST=(var_cpu var_ram var_disk var_hostname var_brg var_vlan var_runner_url var_runner_labels var_enable_rdp var_enable_ssh)
 declare -A _HARD_ENV=()
 
 _find_global_defaults() {
@@ -133,6 +133,8 @@ seed_defaults() {
   DEF_VLAN="${var_vlan:-}"
   DEF_RUNNER_URL="${var_runner_url:-https://github.com/}"
   DEF_RUNNER_LABELS="${var_runner_labels:-self-hosted,windows,x64,windows-2025}"
+  DEF_RDP="${var_enable_rdp:-yes}"
+  DEF_SSH="${var_enable_ssh:-yes}"
 }
 
 # Offer to persist the current (advanced) settings as this app's defaults.
@@ -151,6 +153,8 @@ var_brg=${BRG}
 var_vlan=${VLAN#,tag=}
 var_runner_url=${RUNNER_URL}
 var_runner_labels=${RUNNER_LABELS}
+var_enable_rdp=${ENABLE_RDP}
+var_enable_ssh=${ENABLE_SSH}
 EOF
 
   if [[ ! -f "$file" ]]; then
@@ -269,6 +273,8 @@ function default_settings() {
   [ -n "$DEF_VLAN" ] && VLAN=",tag=$DEF_VLAN" || VLAN=""
   MTU=""
   START_VM="yes"
+  ENABLE_RDP="$DEF_RDP"
+  ENABLE_SSH="$DEF_SSH"
   METHOD="default"
 
   echo -e "${CONTAINERID}${BOLD}${DGN}Virtual Machine ID: ${BGN}${VMID}${CL}"
@@ -278,6 +284,8 @@ function default_settings() {
   echo -e "${RAMSIZE}${BOLD}${DGN}RAM Size: ${BGN}${RAM_SIZE}${CL}"
   echo -e "${BRIDGE}${BOLD}${DGN}Bridge: ${BGN}${BRG}${CL}"
   echo -e "${MACADDRESS}${BOLD}${DGN}MAC Address: ${BGN}${MAC}${CL}"
+  echo -e "${NETWORK}${BOLD}${DGN}Enable RDP: ${BGN}${ENABLE_RDP}${CL}"
+  echo -e "${ROOTSSH}${BOLD}${DGN}Enable SSH: ${BGN}${ENABLE_SSH}${CL}"
   echo -e "${GATEWAY}${BOLD}${DGN}Start VM when completed: ${BGN}yes${CL}"
   runner_settings
   echo -e "${CREATING}${BOLD}${DGN}Creating a Windows GitHub Runner VM using the above settings${CL}"
@@ -393,6 +401,22 @@ function advanced_settings() {
     START_VM="no"
   fi
   echo -e "${GATEWAY}${BOLD}${DGN}Start VM when completed: ${BGN}${START_VM}${CL}"
+
+  if [ "$DEF_RDP" = "yes" ]; then _rdp_flag=(); else _rdp_flag=(--defaultno); fi
+  if (whiptail --backtitle "Proxmox VE Helper Scripts" "${_rdp_flag[@]}" --title "REMOTE DESKTOP" --yesno "Enable Remote Desktop (RDP) in the guest?" 10 58); then
+    ENABLE_RDP="yes"
+  else
+    ENABLE_RDP="no"
+  fi
+  echo -e "${NETWORK}${BOLD}${DGN}Enable RDP: ${BGN}${ENABLE_RDP}${CL}"
+
+  if [ "$DEF_SSH" = "yes" ]; then _ssh_flag=(); else _ssh_flag=(--defaultno); fi
+  if (whiptail --backtitle "Proxmox VE Helper Scripts" "${_ssh_flag[@]}" --title "OPENSSH SERVER" --yesno "Enable OpenSSH Server (SSH) in the guest?" 10 58); then
+    ENABLE_SSH="yes"
+  else
+    ENABLE_SSH="no"
+  fi
+  echo -e "${ROOTSSH}${BOLD}${DGN}Enable SSH: ${BGN}${ENABLE_SSH}${CL}"
 
   runner_settings
 
@@ -604,8 +628,34 @@ cat <<'RUNNERPS1' >"$INJECT_DIR/install-runner.ps1"
 $ErrorActionPreference = 'Stop'
 Start-Transcript -Path 'C:\actions-runner-install.log' -Append
 
+$enableRdp = ('__ENABLE_RDP__' -eq 'yes')
+$enableSsh = ('__ENABLE_SSH__' -eq 'yes')
+
 # The imported disk may be larger than the VHD's virtual size; grow C: into it.
 "select volume c`r`nextend" | diskpart | Out-Null
+
+# Remote Desktop (RDP) - best-effort, keeps Network Level Authentication on.
+if ($enableRdp) {
+  try {
+    Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0
+    Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'UserAuthentication' -Value 1
+    Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'
+  } catch { Write-Warning "Enable RDP failed: $_" }
+}
+
+# OpenSSH Server - install the capability, enable and start the service, open 22.
+if ($enableSsh) {
+  try {
+    Add-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0' | Out-Null
+    Set-Service -Name sshd -StartupType Automatic
+    Start-Service sshd
+    if (-not (Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue)) {
+      New-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -DisplayName 'OpenSSH Server (sshd)' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 | Out-Null
+    } else {
+      Enable-NetFirewallRule -Name 'OpenSSH-Server-In-TCP'
+    }
+  } catch { Write-Warning "Enable OpenSSH failed: $_" }
+}
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $dir = 'C:\actions-runner'
@@ -667,7 +717,9 @@ _subst_file "$INJECT_DIR/install-runner.ps1" \
   "__URL__" "$RUNNER_URL" \
   "__TOKEN__" "$RUNNER_TOKEN" \
   "__NAME__" "$RUNNER_NAME" \
-  "__LABELS__" "$RUNNER_LABELS"
+  "__LABELS__" "$RUNNER_LABELS" \
+  "__ENABLE_RDP__" "$ENABLE_RDP" \
+  "__ENABLE_SSH__" "$ENABLE_SSH"
 msg_ok "Generated unattended configuration"
 
 msg_info "Injecting configuration into the disk image"
@@ -779,9 +831,14 @@ echo -e "${TAB}${DGN}OS: ${BGN}Windows Server 2025 (Evaluation VHDX)${CL}"
 echo -e "${TAB}${DGN}Runner URL: ${BGN}${RUNNER_URL}${CL}"
 echo -e "${TAB}${DGN}Runner Name: ${BGN}${RUNNER_NAME}${CL}"
 echo -e "${TAB}${DGN}Runner Labels: ${BGN}${RUNNER_LABELS}${CL}"
+echo -e "${TAB}${DGN}Remote Desktop (RDP): ${BGN}${ENABLE_RDP}${CL}"
+echo -e "${TAB}${DGN}OpenSSH Server (SSH): ${BGN}${ENABLE_SSH}${CL}"
 echo -e "${TAB}${DGN}Administrator Password: ${BGN}${ADMIN_PASS}${CL}"
 echo -e "${TAB}${YW}Save the Administrator password now - it is not stored anywhere else.${CL}"
 echo -e "${TAB}${YW}First boot runs OOBE unattended, then the runner registers automatically (log: C:\\actions-runner-install.log).${CL}"
+if [ "$ENABLE_RDP" = "yes" ] || [ "$ENABLE_SSH" = "yes" ]; then
+  echo -e "${TAB}${YW}Sign in as Administrator with that password over RDP/SSH once the guest is up.${CL}"
+fi
 
 post_update_to_api "done" "none"
 msg_ok "Completed successfully!\n"
